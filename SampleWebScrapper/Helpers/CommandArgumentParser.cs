@@ -6,10 +6,19 @@ internal static class CommandArgumentParser
 {
     public static InputParams? Parse(string[] args)
     {
-        if (args.Length == 0 || args.Length > 4)
+        if (args.Length == 0)
         {
             return InputParams.CreateInvalid("Missing required arguments.");
         }
+
+        if(args.Length > 6)
+        {
+           return InputParams.CreateInvalid("Too many arguments.");
+        }
+
+        bool interactive = !args.Contains("--no-interactive", StringComparer.OrdinalIgnoreCase);
+
+        args = args.Where(a => !a.Equals("--no-interactive", StringComparison.OrdinalIgnoreCase)).ToArray();
 
         string baseUrl = args[0].Trim();
 
@@ -67,10 +76,17 @@ internal static class CommandArgumentParser
             }
         }
 
-        if (Uri.IsWellFormedUriString(args[0], UriKind.Absolute))
+        if (!Uri.IsWellFormedUriString(args[0], UriKind.Absolute))
         {
-            var parameters = InputParams.CreateValid(baseUrl, outputDirectory, parallelProcessCount, htmlExtensions, cssExtensions, retryOnTimeout);
+            return InputParams.CreateInvalid("<base-url> needs to be a valid absolute URL.");
+        }
 
+        var parameters = InputParams.CreateValid(baseUrl, outputDirectory, parallelProcessCount, htmlExtensions, cssExtensions, retryOnTimeout);
+
+        
+
+        if(interactive)
+        {
             string message = $"""
 
                 1. If you choose to proceed, the following parameters will be used:
@@ -96,11 +112,9 @@ internal static class CommandArgumentParser
                 Console.WriteLine("Operation cancelled by user.");
                 return null;
             }
-
-            return parameters;
         }
 
-        return InputParams.CreateInvalid("<base-url> needs to be a valid absolute URL.");
+        return parameters;
     }
 }
 
@@ -163,7 +177,7 @@ internal class InputParams
         return $"""
             {errorMessage}
 
-            Usage: SampleWebScrapper <base-url> [od:<output-directory>] [pc:<parallel-count>] [htm:<html-extensions>] [rto:<retry-on-timeout>]
+            Usage: SampleWebScrapper <base-url> [od:<output-directory>] [pc:<parallel-count>] [htm:<html-extensions>] [rto:<retry-on-timeout>] [--no-interactive]
 
                <base-url>                  This is required parameter.
                                            The URL to start the web scraping from. 
@@ -188,6 +202,10 @@ internal class InputParams
                                            A boolean (true/false) value indicating whether to retry the download on timeout.
                                            Default is "rto:false".
                                            WARNING: Setting this to true may cause the program to run indefinitely.
+
+               --no-interactive            An optional flag to disable the interactive confirmation prompt.
+                                           If this flag is not provided, the program will prompt for confirmation before proceeding.
+                                           This flag can be used to run the program in non-interactive mode, e.g. from a script.
 
                Example: SampleWebScrapper "https://www.example.com" "od:C:\{DefaultOutputDirectory}" "pc:{Environment.ProcessorCount}" "htm:{DefaultHtmlExtensions}"
             """;
