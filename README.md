@@ -130,19 +130,44 @@ The developer acknowledges there might be ways to optimize the solution further.
 
 # Build and Deployment
 
-### Visual Studio:
+## Visual Studio:
 
-1.  Clone the repository using Visual Studio.
-    1.  Open the solution.
-    2.  Restore dependencies if needed.
-    3.  Build and run the project from the IDE.
+-   Build Your Application:
+-   Open your .NET 8.0 console application project in Visual Studio 2022.
+-   Build the project to ensure it compiles successfully.
+-   Publish the Application:
+-   Right-click on your project in the Solution Explorer.
+-   Choose “Publish” from the context menu.
+-   Configure the publish settings (target framework, runtime, etc.).
+-   Click “Publish” to generate the deployment files.
 
-### .NET CLI:
+### Choose Deployment Type:
 
-1.  Clone the repository using ``` git clone ```.
-    1.  Navigate to the project directory.
-    2.  Restore dependencies using ``` dotnet restore ```.
-    3.  Build and run the application using  ``` dotnet build ``` and ``` dotnet run ```.
+-   You can select either “Framework-Dependent Deployment (FDD)” or “Self-Contained Deployment (SCD)” based on your requirements.
+
+## .NET CLI:
+
+-   Open a Terminal or Command Prompt:
+-   Navigate to your project directory.
+-   Publish the Application:
+-   Run the following command for FDD:
+
+   ``` dotnet publish -c Release -p:UseAppHost=false ```
+
+-   Or for SCD (replace \<RID\> with the appropriate runtime identifier):
+
+   ``` dotnet publish -c Release -r \<RID\> --self-contained true ```
+
+### Find the Published Files:
+
+-   The published files will be in the ./bin/Release/net8.0/publish/ directory (for FDD) or in a platform-specific folder (for SCD).
+-   Remember to adjust the settings according to your specific needs.
+
+## Distribution:
+
+After the application has been published using Visual Studio 2022 or the .NET CLI, navigate to the publish folder (e.g., ./bin/Release/net8.0/publish/). Copy the contents and distribute them to the end users. The content will vary based on the deployment type selected during the publishing process, whether it is Self-Contained or Framework-Dependent.
+
+Please note that framework-dependent publishing requires the targeted framework to be installed on the target machine.
 
 # How to use
 
