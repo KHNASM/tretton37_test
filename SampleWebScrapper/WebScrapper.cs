@@ -19,6 +19,7 @@ internal class WebScrapper
     private readonly Uri _baseUri;
     private readonly string _startingUrl;
     private readonly string _destinationRootPath;
+    private readonly InputParams _inputParams;
     private readonly IOutputLogger _logger;
     private readonly IFilingHelper _persistenceHelper;
     private volatile int _itemCount = 0; // volatile to prevent compiler optimizations
@@ -45,6 +46,7 @@ internal class WebScrapper
 
         _baseUri = new Uri(baseUrl);
         _startingUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/', '\\');
+        _inputParams = inputParams;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _persistenceHelper = persistenceHelper;
     }
@@ -71,7 +73,7 @@ internal class WebScrapper
 
         while (_queue.Count > 0)
         {
-            int parallelCount = Math.Min(_queue.Count, Environment.ProcessorCount);
+            int parallelCount = Math.Min(_queue.Count, _inputParams.ParallelProcessCount);
 
             List<Task> tasks = new();
 
@@ -93,9 +95,9 @@ internal class WebScrapper
 
         for (int i = 0; i < _deferredLinks.Count; i++)
         {
-            deferredTasks.Add(DownloadResourceAsync(_deferredLinks.ElementAt(i).Key, false));
+            deferredTasks.Add(DownloadResourceAsync(_deferredLinks.ElementAt(i).Key));
 
-            if ((i + 1) % Environment.ProcessorCount == 0)
+            if ((i + 1) % _inputParams.ParallelProcessCount == 0)
             {
                 await Task.WhenAll(deferredTasks);
                 deferredTasks.Clear();
@@ -147,7 +149,7 @@ internal class WebScrapper
         await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
     }
 
-    private async Task DownloadResourceAsync(string url, bool drilldown = true)
+    private async Task DownloadResourceAsync(string url)
     {
         if (_visited.ContainsKey(url))
         {
@@ -184,13 +186,13 @@ internal class WebScrapper
 
         bool success = await DownloadAsync(url, uri, destinationPath);
 
-        if (success && drilldown)
+        if (success)
         {
             QueueLinksFromFileAsync(destinationPath, uri);
         }
     }
 
-    private async Task<bool> DownloadAsync(string url, Uri uri, string destinatonPath)
+    private async Task<bool> DownloadAsync(string url, Uri uri, string destinationPath)
     {
         try
         {
@@ -208,7 +210,7 @@ internal class WebScrapper
             }
 
             using Stream stream = await response.Content.ReadAsStreamAsync();
-            await SaveResourceAsync(stream, destinatonPath);
+            await SaveResourceAsync(stream, destinationPath);
 
             Interlocked.Increment(ref _itemCount);  // thread-safe increment
 
@@ -226,6 +228,12 @@ internal class WebScrapper
 
     private void QueueLinksFromFileAsync(string path, Uri currentUri)
     {
+        if(!_inputParams.IsHtmlFile(path))
+        {
+            _logger.LogInsignificantAsync($"Skipping '{path}' because it is not an html file.");
+            return;
+        }
+
         HtmlDocument doc = new();
 
         doc.Load(path); // TODO: Async? non-html?

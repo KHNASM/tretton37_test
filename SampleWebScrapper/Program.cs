@@ -14,19 +14,17 @@ public class Program
 
         try
         {
-            InputParams inputParameters = CommandArgumentParser.Parse(args);
+            InputParams? inputParameters = CommandArgumentParser.Parse(args);
 
-            if (!inputParameters.IsValid)
+            if(inputParameters is null)
             {
-                Console.WriteLine(inputParameters.ErrorMessage);
                 return;
             }
 
-            Console.Write("Any existing outputs will be overwritten. Sure to continue [Y/N]: ");
-            string? response = Console.ReadLine();
-
-            if (string.IsNullOrWhiteSpace(response) || !response.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
+            if (!inputParameters.IsValid)
             {
+                Console.WriteLine();
+                Console.WriteLine(inputParameters.ErrorMessage);
                 return;
             }
 
@@ -45,7 +43,6 @@ public class Program
             // restore the original colors anyway
             Console.ForegroundColor = foregroundColor;
             Console.BackgroundColor = backgroundColor;
-            Console.WriteLine("That's all folks :)");
         }
     }
 }
