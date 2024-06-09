@@ -1,4 +1,6 @@
-﻿namespace SampleWebScrapper.Helpers;
+﻿using System.Text.RegularExpressions;
+
+namespace SampleWebScrapper.Helpers;
 
 internal class FilingHelper : IFilingHelper
 {
@@ -44,4 +46,22 @@ internal class FilingHelper : IFilingHelper
         using var fileStream = File.Create(destinationPath);
         await stream.CopyToAsync(fileStream);
     }
+
+    public (string ModifiedUrl, string ModifiedPath) ModifyPaths(string originalUrl, string originalPath)
+    {
+        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(originalPath);
+
+        string fileExtension = Path.GetExtension(originalPath);
+        string randomString = Guid.NewGuid().ToString("N");
+        string modifiedFileName = $"{fileNameWithoutExtension}_{randomString}{fileExtension}";
+        string directory = Path.GetDirectoryName(originalPath)!;
+        string modifiedFilePath = Path.Combine(directory, $"{modifiedFileName}");
+
+        string pattern = @$"{fileNameWithoutExtension}.*$";
+        string modifiedUrl = Regex.Replace(originalUrl, pattern, modifiedFileName);
+
+        return (modifiedUrl, modifiedFilePath);
+    }
+
+    public string CombinePaths(string path1, string path2) => Path.Combine(path1, path2);
 }

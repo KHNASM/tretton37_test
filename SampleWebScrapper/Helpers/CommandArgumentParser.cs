@@ -16,6 +16,7 @@ internal static class CommandArgumentParser
         string? outputDirectory = null;
         int? parallelProcessCount = null;
         string? htmlExtensions = null;
+        string? cssExtensions = null;
         bool? retryOnTimeout = null;
 
         if (args.Length > 1)
@@ -38,11 +39,19 @@ internal static class CommandArgumentParser
                     continue;
                 }
 
-                match = Regex.Match(arg, @"^\s*ext\s*:\s*(?<pc>[a-zA-Z0-9_\-,]+)\s*$", RegexOptions.IgnoreCase);
+                match = Regex.Match(arg, @"^\s*htm\s*:\s*(?<htm>[a-zA-Z0-9_\-,]+)\s*$", RegexOptions.IgnoreCase);
 
                 if (match.Success)
                 {
-                    htmlExtensions = match.Groups["pc"].Value.Trim();
+                    htmlExtensions = match.Groups["htm"].Value.Trim();
+                    continue;
+                }
+
+                match = Regex.Match(arg, @"^\s*css\s*:\s*(?<css>[a-zA-Z0-9_\-,]+)\s*$", RegexOptions.IgnoreCase);
+
+                if (match.Success)
+                {
+                    cssExtensions = match.Groups["css"].Value.Trim();
                     continue;
                 }
 
@@ -60,7 +69,7 @@ internal static class CommandArgumentParser
 
         if (Uri.IsWellFormedUriString(args[0], UriKind.Absolute))
         {
-            var parameters = InputParams.CreateValid(baseUrl, outputDirectory, parallelProcessCount, htmlExtensions, retryOnTimeout);
+            var parameters = InputParams.CreateValid(baseUrl, outputDirectory, parallelProcessCount, htmlExtensions, cssExtensions, retryOnTimeout);
 
             string message = $"""
 
@@ -70,6 +79,7 @@ internal static class CommandArgumentParser
                    Output Directory:        {parameters.OutputDirectory}
                    Parallel Process Count:  {parameters.ParallelProcessCount}
                    HTML Extensions:         {parameters.HtmlExtensions}
+                   Stylesheet Extensions:   {parameters.CssExtensions}
                    Retry on Timeout:        {parameters.RetryOnTimeout}
 
                 2. Any existing outputs will nbe overwritten.
@@ -101,20 +111,28 @@ internal class InputParams
         ".html", ".htm"
     };
 
+    private HashSet<string> _validStylesheetExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".css"
+    };
+
     private const string DefaultOutputDirectory = "_SampleWebScrapper_Output";
     private const string DefaultHtmlExtensions = "html,htm";
+    private const string DefaultCssExtensions = "css";
 
     private InputParams(
         string baseUrl,
         string? outputDirectory,
         int? parallelProcessCount,
         string? htmlExtensions,
+        string? cssExtensions,
         bool? retryOnTimeout,
         string? errorMessage)
     {
         BaseUrl = baseUrl;
         OutputDirectory = outputDirectory ?? DefaultOutputDirectory;
         HtmlExtensions = htmlExtensions ?? DefaultHtmlExtensions;
+        CssExtensions = cssExtensions ?? DefaultCssExtensions;
         ErrorMessage = BuildErrorMessage(errorMessage);
         RetryOnTimeout = retryOnTimeout ?? false;
 
@@ -124,6 +142,12 @@ internal class InputParams
 
         _validHtmlExtensions = new HashSet<string>(
             HtmlExtensions
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(e => $".{e.Trim(' ', '.')}"),
+            StringComparer.OrdinalIgnoreCase);
+
+        _validStylesheetExtensions = new HashSet<string>(
+            CssExtensions
                 .Split(',', StringSplitOptions.RemoveEmptyEntries)
                 .Select(e => $".{e.Trim(' ', '.')}"),
             StringComparer.OrdinalIgnoreCase);
@@ -139,7 +163,7 @@ internal class InputParams
         return $"""
             {errorMessage}
 
-            Usage: SampleWebScrapper <base-url> [od:<output-directory>] [pc:<parallel-count>] [ext:<html-extensions>] [rto:<retry-on-timeout>]
+            Usage: SampleWebScrapper <base-url> [od:<output-directory>] [pc:<parallel-count>] [htm:<html-extensions>] [rto:<retry-on-timeout>]
 
                <base-url>                  This is required parameter.
                                            The URL to start the web scraping from. 
@@ -155,17 +179,17 @@ internal class InputParams
                                            The number must be between 1 and 99.
                                            Default is "pc:{Environment.ProcessorCount}".
 
-               ext:<html-extensions>       This is optional parameter.
+               htm:<html-extensions>       This is optional parameter.
                                            The file extensions to consider as HTML files.
                                            Value must be a comma separated list of extensions without the dot and spaces.
-                                           Default is "ext:{DefaultHtmlExtensions}".
+                                           Default is "htm:{DefaultHtmlExtensions}".
 
                rto:<retry-on-timeout>      This is optional parameter.
                                            A boolean (true/false) value indicating whether to retry the download on timeout.
                                            Default is "rto:false".
                                            WARNING: Setting this to true may cause the program to run indefinitely.
 
-               Example: SampleWebScrapper "https://www.example.com" "od:C:\{DefaultOutputDirectory}" "pc:{Environment.ProcessorCount}" "ext:{DefaultHtmlExtensions}"
+               Example: SampleWebScrapper "https://www.example.com" "od:C:\{DefaultOutputDirectory}" "pc:{Environment.ProcessorCount}" "htm:{DefaultHtmlExtensions}"
             """;
     }
 
@@ -176,10 +200,10 @@ internal class InputParams
             throw new ArgumentException($"'{nameof(errorMessage)}' cannot be null or whitespace.", nameof(errorMessage));
         }
 
-        return new InputParams(null!, null, null, null, null, errorMessage);
+        return new InputParams(null!, null, null, null, null, null, errorMessage);
     }
 
-    public static InputParams CreateValid(string baseUrl, string? outputDirectory, int? parallelProcessCount, string? htmlExtensions, bool? retryOnTimeout)
+    public static InputParams CreateValid(string baseUrl, string? outputDirectory, int? parallelProcessCount, string? htmlExtensions, string? cssExtensions, bool? retryOnTimeout)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -202,6 +226,7 @@ internal class InputParams
                 outputDirectory: outputDirectory,
                 parallelProcessCount: parallelProcessCount,
                 htmlExtensions: htmlExtensions,
+                cssExtensions: cssExtensions,
                 retryOnTimeout: retryOnTimeout,
                 errorMessage: null);
         }
@@ -215,6 +240,8 @@ internal class InputParams
 
     public bool IsHtmlFile(string fileName) => _validHtmlExtensions.Contains(Path.GetExtension(fileName).Trim());
 
+    public bool IsStylesheetFile(string fileName) => _validStylesheetExtensions.Contains(Path.GetExtension(fileName).Trim());
+
     public string BaseUrl { get; }
 
     public string OutputDirectory { get; }
@@ -224,6 +251,8 @@ internal class InputParams
     public int ParallelProcessCount { get; }
 
     public string HtmlExtensions { get; }
+
+    public string CssExtensions { get; }
 
     public bool RetryOnTimeout { get; }
 }

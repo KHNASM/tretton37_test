@@ -4,6 +4,7 @@ using SampleWebScrapper.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 
 namespace SampleWebScrapper;
 
@@ -24,7 +25,7 @@ internal class WebScrapper
     private readonly string _destinationRootPath;
     private readonly InputParams _inputParams;
     private readonly IOutputLogger _logger;
-    private readonly IFilingHelper _persistenceHelper;
+    private readonly IFilingHelper _filingHelper;
     private volatile int _itemCount = 0; // volatile to prevent compiler optimizations
 
     public WebScrapper(InputParams inputParams, IOutputLogger logger, IFilingHelper persistenceHelper)
@@ -51,7 +52,7 @@ internal class WebScrapper
         _startingUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/', '\\');
         _inputParams = inputParams;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _persistenceHelper = persistenceHelper;
+        _filingHelper = persistenceHelper;
     }
 
     public async Task RunScraperAsync()
@@ -65,18 +66,18 @@ internal class WebScrapper
         await _logger.LogEmphasisAsync($"+ Enqueuing '{_startingUrl}' for processing...");
         _queue.Enqueue(_startingUrl);
 
-        while(true)
+        while (true)
         {
             await ScrapeCoreResourcesAsync();
             await DownloadDeferredResourcesAsync();
-        
-            if(_queue.Count == 0)
+
+            if (_queue.Count == 0)
             {
                 break;
             }
 
             await _logger.LogEmphasisAsync($"Restarting to process {_queue.Count} requeued resources...");
-            
+
             _deferredLinks.Clear();
         }
 
@@ -177,7 +178,7 @@ internal class WebScrapper
     {
         if (_visited.ContainsKey(url))
         {
-            await _logger.LogInsignificantAsync($"The resource at '{url}' has already been visited.");
+            await _logger.LogInsignificantAsync($"Skipping '{url}' because it has already been visited.");
             return;
         }
         else
@@ -193,7 +194,7 @@ internal class WebScrapper
             return;
         }
 
-        if (uri.Host != _baseUri.Host)
+        if (!string.Equals(uri.Host, _baseUri.Host, StringComparison.OrdinalIgnoreCase))
         {
             string message = $"Skipping downloading page because '{url}' is not on the same domain as the base url.";
             await _logger.LogWarningAsync(message);
@@ -201,18 +202,18 @@ internal class WebScrapper
             return;
         }
 
-        string destinationPath = _persistenceHelper.MapUriToLocalPath(_destinationRootPath, uri);
+        string destinationPath = _filingHelper.MapUriToLocalPath(_destinationRootPath, uri);
 
         if (destinationPath == _destinationRootPath)
         {
-            destinationPath = Path.Combine(destinationPath, "index.html");
+            destinationPath = _filingHelper.CombinePaths(destinationPath, "index.html");
         }
 
         bool success = await DownloadAsync(url, destinationPath);
 
         if (success)
         {
-            QueueLinksFromFileAsync(destinationPath, uri);
+            await DrilldownForFurtherLinks(destinationPath, uri);
         }
     }
 
@@ -277,11 +278,27 @@ internal class WebScrapper
         _queue.Enqueue(url);
     }
 
-    private void QueueLinksFromFileAsync(string path, Uri currentUri)
+    private async Task DrilldownForFurtherLinks(string path, Uri currentUri)
+    {
+        if (_inputParams.IsHtmlFile(path))
+        {
+            await DrilldownHtmlForFurtherLinksAsync(path, currentUri);
+        }
+        else if (_inputParams.IsStylesheetFile(path))
+        {
+            await DrilldownStylesheetForFurtherLinksAsync(path, currentUri);
+        }
+        else
+        {
+            await _logger.LogInsignificantAsync($"Skipping '{path}' because it is not file type configured for drilldown.");
+        }
+    }
+
+    private async Task DrilldownHtmlForFurtherLinksAsync(string path, Uri currentUri)
     {
         if (!_inputParams.IsHtmlFile(path))
         {
-            _logger.LogInsignificantAsync($"Skipping '{path}' because it is not an html file.");
+            await _logger.LogInsignificantAsync($"Skipping '{path}' because it is not an html file.");
             return;
         }
 
@@ -315,6 +332,90 @@ internal class WebScrapper
         }
     }
 
+    private async Task DrilldownStylesheetForFurtherLinksAsync(string path, Uri currentUri)
+    {
+        if (!_inputParams.IsStylesheetFile(path))
+        {
+            await _logger.LogInsignificantAsync($"Skipping '{path}' because it is not a stylesheet file.");
+            return;
+        }
+
+        string[] allLines = await File.ReadAllLinesAsync(path);
+
+        for (int i = 0; i< allLines.Length; i++)
+        {
+            string line = allLines[i];
+        
+            var matches = Regex.Matches(line, @"url\s*\(\s*'(?<url>.*?)\s*'\s*\)", RegexOptions.IgnoreCase)
+                 .Where(m => m.Success)
+                 .ToArray();
+
+            if (matches.Length == 0)
+            {
+                continue;
+            }
+
+            string outputLine = line;
+
+            foreach (var match in matches)
+            {
+                string originalUrl = match.Groups["url"].Value;
+
+                if (!Uri.TryCreate(originalUrl, UriKind.RelativeOrAbsolute, out Uri? originalUri) || originalUri == null)
+                {
+                    continue;
+                }
+
+                Uri absoluteUri = originalUri;
+
+                if (!originalUri.IsAbsoluteUri)
+                {
+                    absoluteUri = new Uri(currentUri, originalUri);
+                }
+
+                if(!string.Equals(absoluteUri.Host, _baseUri.Host, StringComparison.OrdinalIgnoreCase))
+                {
+                    await _logger.LogInsignificantAsync($"Skipping '{originalUrl}' because it is not on the same domain as the base url.");
+                    continue;
+                }
+
+                Uri purgedUri = new (_baseUri, absoluteUri.LocalPath);
+
+                string destinationPath = _filingHelper.MapUriToLocalPath(_destinationRootPath, purgedUri);
+
+                if (string.IsNullOrWhiteSpace(purgedUri.Query))
+                {
+                    string? absoluteOriginalUrl = ConvertToAbsoluteUrl(originalUrl, currentUri);
+
+                    if (!string.IsNullOrWhiteSpace(absoluteOriginalUrl))
+                    {
+                        await DownloadAsync(absoluteOriginalUrl, destinationPath);
+                    }
+                }
+                else
+                {
+                    var (modifiedUrl, modifiedFilePath) = _filingHelper.ModifyPaths(originalUrl, destinationPath);    
+
+                    string? absoluteOriginalUrl = ConvertToAbsoluteUrl(originalUrl, currentUri);
+
+                    if (!string.IsNullOrWhiteSpace(absoluteOriginalUrl))
+                    {
+                        bool result = await DownloadAsync(absoluteOriginalUrl, modifiedFilePath);
+
+                        if (result)
+                        {
+                            outputLine = outputLine.Replace(originalUrl, modifiedUrl);
+                        }
+                    }
+                }
+            }
+
+            allLines[i] = outputLine;
+        }
+
+        await File.WriteAllLinesAsync(path, allLines);
+    }
+
     private string? ConvertToAbsoluteUrl(string url, Uri currentUri)
     {
         if (string.IsNullOrWhiteSpace(url))
@@ -332,7 +433,7 @@ internal class WebScrapper
             uri = new Uri(currentUri, uri);
         }
 
-        if (uri.IsAbsoluteUri && uri.Host != _baseUri.Host)
+        if (uri.IsAbsoluteUri && !string.Equals(uri.Host, _baseUri.Host, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -354,6 +455,6 @@ internal class WebScrapper
             _filesProcessed.TryAdd(destinationPath, null);
         }
 
-        await _persistenceHelper.SaveFileAsync(stream, destinationPath);
+        await _filingHelper.SaveFileAsync(stream, destinationPath);
     }
 }
