@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "SampleWebScrapper": {
+      "commandName": "Project",
+      "commandLineArgs": "https://books.toscrape.com/\r\n_MY_TEST_SCRPPING_OUTPUT"
+    }
+  }
+}
