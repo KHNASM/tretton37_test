@@ -148,10 +148,10 @@ The developer acknowledges there might be ways to optimize the solution further.
 
 Open a terminal and navigate to the directory containing WebScrapper.exe. Execute the WebScrapper.exe file and follow the on-screen instructions. For example:
 
-1\. C:\\WebScrapper\\WebScrapper "https://www.example.com" "od:C:\\Scrapper_Output" "pc:20" "htm:html,htm"
+``` C:\WebScrapper\WebScrapper "https://www.example.com" "od:C:\Scrapper_Output" "pc:20" "htm:html,htm" ```
 
 Refer to Appendix A for detailed information on required and optional arguments.
 
-Appendix A – Options/Configurations (Command Line Arguments)
+## Appendix A – Options/Configurations (Command Line Arguments)
 
 ![A screenshot of a computer program Description automatically generated](https://asre.dev/wp-content/uploads/2024/06/tretton37_scrapper_ss-1.jpg)
