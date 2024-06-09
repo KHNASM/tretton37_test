@@ -78,14 +78,14 @@ internal class WebScrapper
 
         if (!response.IsSuccessStatusCode)
         {
-            Console.WriteLine($"X X X X X X Failed to download {url}: Server returned: HTTP {(int)response.StatusCode}"); // TODO: revisit to improve this
+            await WriteLineAsync($"X X X X X X Failed to download {url}: Server returned: HTTP {(int)response.StatusCode}"); // TODO: revisit to improve this
             return;
         }
 
         using Stream stream = await response.Content.ReadAsStreamAsync();
         await SaveStreamAsFileAsync(stream, localPath);
 
-        Console.WriteLine($":) :) :) Downloaded {url}"); // TODO: revisit to improve this
+        await WriteLineAsync($":) :) :) Downloaded {url}"); // TODO: revisit to improve this
 
         QueueLinksFromFileAsync(localPath, uri);
     }
@@ -96,10 +96,30 @@ internal class WebScrapper
 
         doc.Load(path); // TODO: Async? non-html?
 
-        var links = doc.DocumentNode.Descendants("a")
+        var pageLinks = doc.DocumentNode.Descendants("a")
             .Select(a => a.GetAttributeValue("href", null))
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
+
+        var linkedLinks = doc.DocumentNode.Descendants("link")
+            .Select(a => a.GetAttributeValue("href", null))
+            .Where(href => !string.IsNullOrWhiteSpace(href))
+            .ToArray();
+
+        var scriptLinks = doc.DocumentNode.Descendants("script")
+            .Select(a => a.GetAttributeValue("src", null))
+            .Where(href => !string.IsNullOrWhiteSpace(href))
+            .ToArray();
+
+        var imageLinks = doc.DocumentNode.Descendants("img")
+            .Select(a => a.GetAttributeValue("src", null))
+            .Where(href => !string.IsNullOrWhiteSpace(href))
+            .ToArray();
+
+        var links = pageLinks
+            .Union(linkedLinks)
+            .Union(scriptLinks)
+            .Union(imageLinks);
 
         foreach (string link in links)
         {
