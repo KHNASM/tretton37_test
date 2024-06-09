@@ -1,4 +1,5 @@
 ﻿using HtmlAgilityPack;
+using SampleWebScrapper.Helpers;
 using SampleWebScrapper.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -17,12 +18,12 @@ internal class WebScrapper
 
     private readonly Uri _baseUri;
     private readonly string _startingUrl;
-    private readonly string _outputRootDirectory;
+    private readonly string _destinationRootPath;
     private readonly IOutputLogger _logger;
-
+    private readonly IFilingHelper _persistenceHelper;
     private volatile int _itemCount = 0; // volatile to prevent compiler optimizations
 
-    public WebScrapper(InputParams inputParams, IOutputLogger logger)
+    public WebScrapper(InputParams inputParams, IOutputLogger logger, IFilingHelper persistenceHelper)
     {
         ArgumentNullException.ThrowIfNull(inputParams);
 
@@ -31,7 +32,7 @@ internal class WebScrapper
             throw new ArgumentException(inputParams.ErrorMessage, nameof(inputParams));
         }
 
-        _outputRootDirectory = inputParams.OutputDirectory;
+        _destinationRootPath = inputParams.OutputDirectory;
 
         if (!Uri.TryCreate(inputParams.BaseUrl, UriKind.RelativeOrAbsolute, out Uri? uri) || uri == null || !uri.IsAbsoluteUri)
         {
@@ -45,17 +46,27 @@ internal class WebScrapper
         _baseUri = new Uri(baseUrl);
         _startingUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/', '\\');
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _persistenceHelper = persistenceHelper;
     }
 
     public async Task RunScraperAsync()
     {
         await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
-        await _logger.LogAsync(MessageType.Normal, $"Starting scrapping {_baseUri} recursively into the directory '{_outputRootDirectory}'. . .");
+        await _logger.LogAsync(MessageType.Normal, $"Starting scrapping {_baseUri} recursively into the directory '{_destinationRootPath}'. . .");
         await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
 
         Stopwatch stopwatch = Stopwatch.StartNew();
+        
+        await ScrapeCoreResourcesAsync();
+        await DownloadDeferredResourcesAsync();
 
+        stopwatch.Stop();
 
+        await LogSummaryAsync(stopwatch.Elapsed);
+    }
+
+    private async Task ScrapeCoreResourcesAsync()
+    {
         _queue.Enqueue(_startingUrl);
 
         while (_queue.Count > 0)
@@ -74,7 +85,10 @@ internal class WebScrapper
 
             await Task.WhenAll(tasks);
         }
+    }
 
+    private async Task DownloadDeferredResourcesAsync()
+    {
         List<Task> deferredTasks = new();
 
         for (int i = 0; i < _deferredLinks.Count; i++)
@@ -92,13 +106,9 @@ internal class WebScrapper
         {
             await Task.WhenAll(deferredTasks);
         }
-
-        stopwatch.Stop();
-
-        await LogSummary(stopwatch.Elapsed);
     }
 
-    private async Task LogSummary(TimeSpan processDuration)
+    private async Task LogSummaryAsync(TimeSpan processDuration)
     {
         await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
         await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
@@ -106,49 +116,35 @@ internal class WebScrapper
         await _logger.LogAsync(MessageType.Normal, "=======", string.Empty);
         await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
 
-        MessageType messageType = MessageType.Success;
+        await LogIssuesAsync("WARNINGS:", _warnings, MessageType.Warning);
+        await LogIssuesAsync("ERRORS:", _errors, MessageType.Error);
 
-        if (_warnings.Count > 0)
-        {
-            messageType = MessageType.Warning;
-
-            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
-
-            await _logger.LogAsync(messageType, "WARNINGS:", string.Empty);
-
-            foreach (string warning in _warnings)
-            {
-                await _logger.LogAsync(messageType, warning, string.Empty);
-            }
-
-            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
-        }
-
-        if (_errors.Count > 0)
-        {
-            messageType = MessageType.Error;
-
-            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
-
-            await _logger.LogAsync(messageType, "ERRORS:", string.Empty);
-
-            foreach (string error in _errors)
-            {
-                await _logger.LogAsync(messageType, error, string.Empty);
-            }
-
-            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
-        }
-
-        await _logger.LogAsync(messageType,
+        await _logger.LogAsync(MessageType.Normal,
             $"""
-
 
             Scraped Items: {_itemCount}
             Errors:        {_errors.Count}
             Warnings:      {_warnings.Count}
             Completed In:  {processDuration}
             """, string.Empty);
+    }
+
+    private async Task LogIssuesAsync(string title, IEnumerable<string> entries, MessageType messageType)
+    {
+        if(entries?.Any() != true)
+        {
+            return;
+        }
+
+        await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
+        await _logger.LogAsync(messageType, "title:", string.Empty);
+
+        foreach (string warning in entries)
+        {
+            await _logger.LogAsync(messageType, warning, string.Empty);
+        }
+
+        await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
     }
 
     private async Task DownloadResourceAsync(string url, bool drilldown = true)
@@ -179,26 +175,26 @@ internal class WebScrapper
             return;
         }
 
-        string localPath = ComputePath(_outputRootDirectory, uri);
+        string destinationPath = _persistenceHelper.MapUriToLocalPath(_destinationRootPath, uri);
 
-        if (localPath == _outputRootDirectory) // TODO: revisit to improve this
+        if (destinationPath == _destinationRootPath)
         {
-            localPath = Path.Combine(localPath, "index.html");
+            destinationPath = Path.Combine(destinationPath, "index.html");
         }
 
-        bool success = await DownloadAsync(url, uri, localPath);
+        bool success = await DownloadAsync(url, uri, destinationPath);
 
         if (success && drilldown)
         {
-            QueueLinksFromFileAsync(localPath, uri);
+            QueueLinksFromFileAsync(destinationPath, uri);
         }
     }
 
-    private async Task<bool> DownloadAsync(string url, Uri uri, string localPath)
+    private async Task<bool> DownloadAsync(string url, Uri uri, string destinatonPath)
     {
         try
         {
-            using HttpClient client = new HttpClient();
+            using HttpClient client = new ();
             var response = await client.GetAsync(uri);
 
             HttpContent content = response.Content;
@@ -212,7 +208,7 @@ internal class WebScrapper
             }
 
             using Stream stream = await response.Content.ReadAsStreamAsync();
-            await SaveStreamAsFileAsync(stream, localPath);
+            await SaveResourceAsync(stream, destinatonPath);
 
             Interlocked.Increment(ref _itemCount);  // thread-safe increment
 
@@ -248,7 +244,6 @@ internal class WebScrapper
             .Union(doc.DocumentNode.Descendants("img")
                 .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
                 .Where(href => !string.IsNullOrWhiteSpace(href)));
-
 
         foreach (var link in deferredLinks)
         {
@@ -288,49 +283,18 @@ internal class WebScrapper
         return absoluteUrl;
     }
 
-    private static string ComputePath(string rootDirectory, Uri uri)
+    private async Task SaveResourceAsync(Stream stream, string destinationPath)
     {
-        if (string.IsNullOrWhiteSpace(rootDirectory))
+        if (_filesProcessed.ContainsKey(destinationPath))
         {
-            throw new ArgumentException($"'{nameof(rootDirectory)}' cannot be null or whitespace.", nameof(rootDirectory));
-        }
-
-        ArgumentNullException.ThrowIfNull(uri);
-
-        if (!uri.IsAbsoluteUri)
-        {
-            throw new ArgumentException($"'{nameof(uri)}' must be an absolute uri", nameof(uri));
-        }
-
-        string localPath = uri.LocalPath
-            .Trim('/', '\\')
-            .Replace('/', '\\');
-
-        localPath = Path.Combine(rootDirectory, localPath);
-
-        return localPath;
-    }
-
-    private async Task SaveStreamAsFileAsync(Stream stream, string localPath)
-    {
-        if (_filesProcessed.ContainsKey(localPath))
-        {
-            await _logger.LogInsignificantAsync($"Already downloaded {localPath}");
+            await _logger.LogInsignificantAsync($"Already downloaded {destinationPath}");
             return;
         }
         else
         {
-            _filesProcessed.TryAdd(localPath, null);
+            _filesProcessed.TryAdd(destinationPath, null);
         }
 
-        string destinationDirectory = Path.GetDirectoryName(localPath)!;
-
-        if (!Directory.Exists(destinationDirectory))
-        {
-            Directory.CreateDirectory(destinationDirectory);
-        }
-
-        using var fileStream = File.Create(localPath);
-        await stream.CopyToAsync(fileStream);
+        await _persistenceHelper.SaveFileAsync(stream, destinationPath);
     }
 }

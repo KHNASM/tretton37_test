@@ -1,4 +1,5 @@
-﻿using SampleWebScrapper.Logging;
+﻿using SampleWebScrapper.Helpers;
+using SampleWebScrapper.Logging;
 
 
 namespace SampleWebScrapper;
@@ -7,27 +8,44 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        Console.Write("Any existing outputs will be overwritten. Sure to continue [Y/N]: ");
-        string? response = Console.ReadLine();
+        // preserve the original colors to be restored later
+        ConsoleColor foregroundColor = Console.ForegroundColor;
+        ConsoleColor backgroundColor = Console.BackgroundColor;
 
-        if (string.IsNullOrWhiteSpace(response) || !response.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            return;
+            InputParams inputParameters = CommandArgumentParser.Parse(args);
+
+            if (!inputParameters.IsValid)
+            {
+                Console.WriteLine(inputParameters.ErrorMessage);
+                return;
+            }
+
+            Console.Write("Any existing outputs will be overwritten. Sure to continue [Y/N]: ");
+            string? response = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(response) || !response.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            IOutputLogger logger = new ConsoleLogger();
+            IFilingHelper filingHelper = new FilingHelper();
+
+            WebScrapper scrapper = new(inputParameters, logger, filingHelper);
+            await scrapper.RunScraperAsync();
         }
-
-        InputParams inputParameters = CommandArgumentParser.Parse(args);
-
-        if (!inputParameters.IsValid)
+        catch (Exception ex)
         {
-            Console.WriteLine(inputParameters.ErrorMessage);
-            return;
+            Console.WriteLine(ex.Message);
         }
-
-        IOutputLogger logger = new ConsoleLogger();
-
-        WebScrapper scrapper = new(inputParameters, logger);
-        await scrapper.RunScraperAsync();
-
-        Console.ReadLine();
+        finally
+        {
+            // restore the original colors anyway
+            Console.ForegroundColor = foregroundColor;
+            Console.BackgroundColor = backgroundColor;
+            Console.WriteLine("That's all folks :)");
+        }
     }
 }
