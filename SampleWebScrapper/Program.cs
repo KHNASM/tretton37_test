@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -21,11 +22,22 @@ public class Program
             Directory.Delete(outputDirectory, true);
         }
 
+        Stopwatch stopwatch = Stopwatch.StartNew();
+
         Directory.CreateDirectory(outputDirectory);
 
         WebScrapper scrapper = new(baseUrl, outputDirectory);
 
         await scrapper.RunScraperAsync();
-    }
 
+        stopwatch.Stop();
+
+        Console.WriteLine();
+        Console.WriteLine();
+        Console.WriteLine();
+
+        Console.WriteLine($"Scraping completed in {stopwatch.Elapsed.TotalSeconds} seconds.");
+
+        Console.ReadLine();
+    }
 }

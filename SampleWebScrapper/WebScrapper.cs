@@ -1,11 +1,13 @@
 ﻿using HtmlAgilityPack;
+using System.Collections.Concurrent;
 
 namespace SampleWebScrapper;
 
 internal class WebScrapper
 {
-    private readonly Queue<string> _queue = new();
-    private readonly HashSet<string> _completed = new();
+    private readonly ConcurrentQueue<string> _queue = new();
+    private readonly ConcurrentDictionary<string, object?> _visited = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, object?> _filesProcessed = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Uri _baseUri;
     private readonly string _startingUrl;
@@ -40,14 +42,94 @@ internal class WebScrapper
     {
         _queue.Enqueue(_startingUrl);
 
-        while (_queue.TryDequeue(out var url))
+        while (_queue.Count > 0)
         {
-            await DownloadPage(url);
+            int parallelCount = Math.Min(_queue.Count, Environment.ProcessorCount);
+
+            List<Task> tasks = new();
+
+            for (int i = 0; i < parallelCount; i++)
+            {
+                if (_queue.TryDequeue(out var parallelUrl))
+                {
+                    tasks.Add(DownloadPageAsync(parallelUrl));
+                }
+            }
+
+            await Task.WhenAll(tasks);
+        }
+
+        // images
+        List<Task> moreTasks = new();
+
+        for (int i = 0; i < _images.Count; i++)
+        {
+            moreTasks.Add(DownloadPageAsync(_images.ElementAt(i).Key, false));
+
+            if ((i + 1) % Environment.ProcessorCount == 0)
+            {
+                await Task.WhenAll(moreTasks);
+                moreTasks.Clear();
+            }
+        }
+
+        if (moreTasks.Count > 0)
+        {
+            await Task.WhenAll(moreTasks);
+        }
+
+
+        // linked files
+        moreTasks.Clear();
+
+        for (int i = 0; i < _linkedFiles.Count; i++)
+        {
+            moreTasks.Add(DownloadPageAsync(_linkedFiles.ElementAt(i).Key, false));
+
+            if ((i + 1) % Environment.ProcessorCount == 0)
+            {
+                await Task.WhenAll(moreTasks);
+                moreTasks.Clear();
+            }
+        }
+
+        if (moreTasks.Count > 0)
+        {
+            await Task.WhenAll(moreTasks);
+        }
+
+        // linked files
+        moreTasks.Clear();
+
+        for (int i = 0; i < _scriptFiles.Count; i++)
+        {
+            moreTasks.Add(DownloadPageAsync(_scriptFiles.ElementAt(i).Key, false));
+
+            if ((i + 1) % Environment.ProcessorCount == 0)
+            {
+                await Task.WhenAll(moreTasks);
+                moreTasks.Clear();
+            }
+        }
+
+        if (moreTasks.Count > 0)
+        {
+            await Task.WhenAll(moreTasks);
         }
     }
 
-    private async Task DownloadPage(string url)
+    private async Task DownloadPageAsync(string url, bool drilldown = true)
     {
+        if (_visited.ContainsKey(url))
+        {
+            await WriteLineAsync($"U U U U  Already visited {url}"); // TODO: revisit to improve this
+            return;
+        }
+        else
+        {
+            _visited.TryAdd(url, null);
+        }
+
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || uri == null)
         {
             await WriteLineAsync($"X X X X X X Unable to download page becase '{url}' is not a valid absolute url"); // TODO: revisit to improve this
@@ -64,11 +146,6 @@ internal class WebScrapper
         if (localPath == _outputRootDirectory) // TODO: revisit to improve this
         {
             localPath = Path.Combine(localPath, "index.html");
-        }
-        if (File.Exists(localPath))
-        {
-            await WriteLineAsync($"I I I I Page already downloaded: {url}"); // TODO: revisit to improve this
-            return;
         }
 
         using var client = new HttpClient();
@@ -87,8 +164,15 @@ internal class WebScrapper
 
         await WriteLineAsync($":) :) :) Downloaded {url}"); // TODO: revisit to improve this
 
-        QueueLinksFromFileAsync(localPath, uri);
+        if (drilldown)
+        {
+            QueueLinksFromFileAsync(localPath, uri);
+        }
     }
+
+    ConcurrentDictionary<string, object?> _images = new(StringComparer.OrdinalIgnoreCase);
+    ConcurrentDictionary<string, object?> _linkedFiles = new(StringComparer.OrdinalIgnoreCase);
+    ConcurrentDictionary<string, object?> _scriptFiles = new(StringComparer.OrdinalIgnoreCase);
 
     private void QueueLinksFromFileAsync(string path, Uri currentUri)
     {
@@ -97,51 +181,71 @@ internal class WebScrapper
         doc.Load(path); // TODO: Async? non-html?
 
         var pageLinks = doc.DocumentNode.Descendants("a")
-            .Select(a => a.GetAttributeValue("href", null))
+            .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("href", null), currentUri)!)
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
 
         var linkedLinks = doc.DocumentNode.Descendants("link")
-            .Select(a => a.GetAttributeValue("href", null))
+            .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("href", null), currentUri)!)
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
 
         var scriptLinks = doc.DocumentNode.Descendants("script")
-            .Select(a => a.GetAttributeValue("src", null))
+            .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
 
         var imageLinks = doc.DocumentNode.Descendants("img")
-            .Select(a => a.GetAttributeValue("src", null))
+            .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
 
-        var links = pageLinks
-            .Union(linkedLinks)
-            .Union(scriptLinks)
-            .Union(imageLinks);
-
-        foreach (string link in links)
+        foreach (var imageUrl in imageLinks)
         {
-            if (!Uri.TryCreate(link, UriKind.RelativeOrAbsolute, out Uri? uri) || uri == null)
-            {
-                continue;
-            }
-            
-            if (!uri.IsAbsoluteUri)
-            {
-                uri = new Uri(currentUri, uri);
-            }
-
-            if (uri.IsAbsoluteUri && uri.Host != _baseUri.Host)
-            {
-                continue;
-            }
-
-            string absoluteUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/', '\\');
-
-            _queue.Enqueue(absoluteUrl);
+            _images.TryAdd(imageUrl, null);
         }
+
+        foreach (var linkedFile in linkedLinks)
+        {
+            _linkedFiles.TryAdd(linkedFile, null);
+        }
+
+        foreach (var scriptFile in scriptLinks)
+        {
+            _scriptFiles.TryAdd(scriptFile, null);
+        }
+
+        foreach (string pageLink in pageLinks)
+        {
+            _queue.Enqueue(pageLink);
+        }
+    }
+
+    private string? ConvertToAbsoluteUrl(string url, Uri currentUri)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(url, UriKind.RelativeOrAbsolute, out Uri? uri) || uri == null)
+        {
+            return null;
+        }
+
+        if (!uri.IsAbsoluteUri)
+        {
+            uri = new Uri(currentUri, uri);
+        }
+
+        if (uri.IsAbsoluteUri && uri.Host != _baseUri.Host)
+        {
+            return null;
+        }
+
+        string absoluteUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/', '\\');
+
+        return absoluteUrl;
     }
 
     private static string ComputePath(string rootDirectory, Uri uri)
@@ -167,8 +271,18 @@ internal class WebScrapper
         return localPath;
     }
 
-    private static async Task SaveStreamAsFileAsync(Stream stream, string localPath)
+    private async Task SaveStreamAsFileAsync(Stream stream, string localPath)
     {
+        if (_filesProcessed.ContainsKey(localPath))
+        {
+            await WriteLineAsync($"F F F F Already processed {localPath}"); // TODO: revisit to improve this
+            return;
+        }
+        else
+        {
+            _filesProcessed.TryAdd(localPath, null);
+        }
+
         string destinationDirectory = Path.GetDirectoryName(localPath)!;
 
         if (!Directory.Exists(destinationDirectory))
