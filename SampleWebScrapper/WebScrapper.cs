@@ -8,28 +8,30 @@ internal class WebScrapper
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly ConcurrentDictionary<string, object?> _visited = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, object?> _filesProcessed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, object?> _nonScrapableLinks = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Uri _baseUri;
     private readonly string _startingUrl;
-
     private readonly string _outputRootDirectory;
-
-
-    public WebScrapper(string url, string outputRootDirectory)
+    
+    public WebScrapper(InputParams inputParams)
     {
-        if (string.IsNullOrWhiteSpace(url))
+        if (inputParams is null)
         {
-            throw new ArgumentException($"'{nameof(url)}' cannot be null or whitespace.", nameof(url));
+            throw new ArgumentNullException(nameof(inputParams));
         }
 
-        _outputRootDirectory = string.IsNullOrWhiteSpace(outputRootDirectory)
-            ? "_SampleWebscrapperOutput"
-            : outputRootDirectory;
-
-
-        if (!Uri.TryCreate(url, UriKind.RelativeOrAbsolute, out Uri? uri) || uri == null || !uri.IsAbsoluteUri)
+        if(!inputParams.IsValid)
         {
-            throw new ArgumentException($"'{nameof(url)}' must be a valid absolute url.", nameof(url));
+           throw new ArgumentException(inputParams.ErrorMessage, nameof(inputParams));
+        }
+
+        _outputRootDirectory = inputParams.OutputDirectory;
+        
+
+        if (!Uri.TryCreate(inputParams.BaseUrl, UriKind.RelativeOrAbsolute, out Uri? uri) || uri == null || !uri.IsAbsoluteUri)
+        {
+            throw new ArgumentException($"'{nameof(inputParams)}.{inputParams.BaseUrl}' must be a valid absolute url.", $"{nameof(inputParams)}.{inputParams.BaseUrl}");
         }
 
         string baseUrl = uri.GetLeftPart(UriPartial.Authority);
@@ -59,51 +61,12 @@ internal class WebScrapper
             await Task.WhenAll(tasks);
         }
 
-        // images
+        // non-scrapable links
         List<Task> moreTasks = new();
 
-        for (int i = 0; i < _images.Count; i++)
+        for (int i = 0; i < _nonScrapableLinks.Count; i++)
         {
-            moreTasks.Add(DownloadPageAsync(_images.ElementAt(i).Key, false));
-
-            if ((i + 1) % Environment.ProcessorCount == 0)
-            {
-                await Task.WhenAll(moreTasks);
-                moreTasks.Clear();
-            }
-        }
-
-        if (moreTasks.Count > 0)
-        {
-            await Task.WhenAll(moreTasks);
-        }
-
-
-        // linked files
-        moreTasks.Clear();
-
-        for (int i = 0; i < _linkedFiles.Count; i++)
-        {
-            moreTasks.Add(DownloadPageAsync(_linkedFiles.ElementAt(i).Key, false));
-
-            if ((i + 1) % Environment.ProcessorCount == 0)
-            {
-                await Task.WhenAll(moreTasks);
-                moreTasks.Clear();
-            }
-        }
-
-        if (moreTasks.Count > 0)
-        {
-            await Task.WhenAll(moreTasks);
-        }
-
-        // linked files
-        moreTasks.Clear();
-
-        for (int i = 0; i < _scriptFiles.Count; i++)
-        {
-            moreTasks.Add(DownloadPageAsync(_scriptFiles.ElementAt(i).Key, false));
+            moreTasks.Add(DownloadPageAsync(_nonScrapableLinks.ElementAt(i).Key, false));
 
             if ((i + 1) % Environment.ProcessorCount == 0)
             {
@@ -132,13 +95,13 @@ internal class WebScrapper
 
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || uri == null)
         {
-            await WriteLineAsync($"X X X X X X Unable to download page becase '{url}' is not a valid absolute url"); // TODO: revisit to improve this
+            await WriteLineAsync($"X X X X X X Unable to download page because '{url}' is not a valid absolute url"); // TODO: revisit to improve this
             return;
         }
 
         if (uri.Host != _baseUri.Host)
         {
-            await WriteLineAsync($"X X X X X X Unable to download page becase '{url}' is not on the same domain as the base url"); // TODO: revisit to improve this
+            await WriteLineAsync($"X X X X X X Unable to download page because '{url}' is not on the same domain as the base url"); // TODO: revisit to improve this
             return;
         }
 
@@ -170,9 +133,6 @@ internal class WebScrapper
         }
     }
 
-    ConcurrentDictionary<string, object?> _images = new(StringComparer.OrdinalIgnoreCase);
-    ConcurrentDictionary<string, object?> _linkedFiles = new(StringComparer.OrdinalIgnoreCase);
-    ConcurrentDictionary<string, object?> _scriptFiles = new(StringComparer.OrdinalIgnoreCase);
 
     private void QueueLinksFromFileAsync(string path, Uri currentUri)
     {
@@ -185,34 +145,20 @@ internal class WebScrapper
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
 
-        var linkedLinks = doc.DocumentNode.Descendants("link")
+        var nonScrapableLinks = doc.DocumentNode.Descendants("link")
             .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("href", null), currentUri)!)
             .Where(href => !string.IsNullOrWhiteSpace(href))
-            .ToArray();
+            .Union(doc.DocumentNode.Descendants("script")
+                .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
+                .Where(href => !string.IsNullOrWhiteSpace(href)))
+            .Union(doc.DocumentNode.Descendants("img")
+                .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
+                .Where(href => !string.IsNullOrWhiteSpace(href)));
 
-        var scriptLinks = doc.DocumentNode.Descendants("script")
-            .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
-            .Where(href => !string.IsNullOrWhiteSpace(href))
-            .ToArray();
 
-        var imageLinks = doc.DocumentNode.Descendants("img")
-            .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("src", null), currentUri)!)
-            .Where(href => !string.IsNullOrWhiteSpace(href))
-            .ToArray();
-
-        foreach (var imageUrl in imageLinks)
+        foreach (var link in nonScrapableLinks)
         {
-            _images.TryAdd(imageUrl, null);
-        }
-
-        foreach (var linkedFile in linkedLinks)
-        {
-            _linkedFiles.TryAdd(linkedFile, null);
-        }
-
-        foreach (var scriptFile in scriptLinks)
-        {
-            _scriptFiles.TryAdd(scriptFile, null);
+            _nonScrapableLinks.TryAdd(link, null);
         }
 
         foreach (string pageLink in pageLinks)
@@ -293,7 +239,6 @@ internal class WebScrapper
         using var fileStream = File.Create(localPath);
         await stream.CopyToAsync(fileStream);
     }
-
 
     private Task WriteLineAsync(string text) => Console.Out.WriteLineAsync(text);
 }

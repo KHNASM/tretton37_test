@@ -14,20 +14,29 @@ public class Program
 
     public static async Task Main(string[] args)
     {
-        const string baseUrl = "https://books.toscrape.com/";
-        const string outputDirectory = "E:\\_Scrapper_Output";
+        Console.Write("Any existing outputs will be overwritten. Sure to continue [Y/N]: ");
+        string? response = Console.ReadLine();
 
-        if(Directory.Exists(outputDirectory))
+        if(string.IsNullOrWhiteSpace(response) || !response.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase))
         {
-            Directory.Delete(outputDirectory, true);
+            return;
         }
+
+        InputParams inputParameters = CommandArgumentParser.Parse(args);
+
+        if (!inputParameters .IsValid)
+        {
+            Console.WriteLine(inputParameters.ErrorMessage);
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"Starting scrapping {inputParameters.BaseUrl} recursively into the directory '{inputParameters.OutputDirectory}'. . .");
+        Console.WriteLine();
 
         Stopwatch stopwatch = Stopwatch.StartNew();
 
-        Directory.CreateDirectory(outputDirectory);
-
-        WebScrapper scrapper = new(baseUrl, outputDirectory);
-
+        WebScrapper scrapper = new(inputParameters);
         await scrapper.RunScraperAsync();
 
         stopwatch.Stop();
