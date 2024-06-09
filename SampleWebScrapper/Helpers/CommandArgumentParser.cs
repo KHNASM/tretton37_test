@@ -16,6 +16,7 @@ internal static class CommandArgumentParser
         string? outputDirectory = null;
         int? parallelProcessCount = null;
         string? htmlExtensions = null;
+        bool? retryOnTimeout = null;
 
         if (args.Length > 1)
         {
@@ -45,13 +46,21 @@ internal static class CommandArgumentParser
                     continue;
                 }
 
+                match = Regex.Match(arg, @"^\s*rto\s*:\s*(?<rto>true|false)\s*$", RegexOptions.IgnoreCase);
+
+                if (match.Success)
+                {
+                    retryOnTimeout = bool.Parse(match.Groups["rto"].Value);
+                    continue;
+                }
+
                 return InputParams.CreateInvalid($"Invalid argument: \"{arg}\"");
             }
         }
 
         if (Uri.IsWellFormedUriString(args[0], UriKind.Absolute))
         {
-            var parameters = InputParams.CreateValid(baseUrl, outputDirectory, parallelProcessCount, htmlExtensions);
+            var parameters = InputParams.CreateValid(baseUrl, outputDirectory, parallelProcessCount, htmlExtensions, retryOnTimeout);
 
             string message = $"""
 
@@ -61,6 +70,7 @@ internal static class CommandArgumentParser
                    Output Directory:        {parameters.OutputDirectory}
                    Parallel Process Count:  {parameters.ParallelProcessCount}
                    HTML Extensions:         {parameters.HtmlExtensions}
+                   Retry on Timeout:        {parameters.RetryOnTimeout}
 
                 2. Any existing outputs will nbe overwritten.
                 
@@ -99,12 +109,14 @@ internal class InputParams
         string? outputDirectory,
         int? parallelProcessCount,
         string? htmlExtensions,
+        bool? retryOnTimeout,
         string? errorMessage)
     {
         BaseUrl = baseUrl;
         OutputDirectory = outputDirectory ?? DefaultOutputDirectory;
         HtmlExtensions = htmlExtensions ?? DefaultHtmlExtensions;
         ErrorMessage = BuildErrorMessage(errorMessage);
+        RetryOnTimeout = retryOnTimeout ?? false;
 
         ParallelProcessCount = parallelProcessCount.HasValue
             ? parallelProcessCount.Value < 1 ? 1 : parallelProcessCount.Value
@@ -127,7 +139,7 @@ internal class InputParams
         return $"""
             {errorMessage}
 
-            Usage: SampleWebScrapper <base-url> [od:<output-directory>] [pc:<parallel-count>] [ext:<html-extensions>]
+            Usage: SampleWebScrapper <base-url> [od:<output-directory>] [pc:<parallel-count>] [ext:<html-extensions>] [rto:<retry-on-timeout>]
 
                <base-url>                  This is required parameter.
                                            The URL to start the web scraping from. 
@@ -148,6 +160,11 @@ internal class InputParams
                                            Value must be a comma separated list of extensions without the dot and spaces.
                                            Default is "ext:{DefaultHtmlExtensions}".
 
+               rto:<retry-on-timeout>      This is optional parameter.
+                                           A boolean (true/false) value indicating whether to retry the download on timeout.
+                                           Default is "rto:false".
+                                           WARNING: Setting this to true may cause the program to run indefinitely.
+
                Example: SampleWebScrapper "https://www.example.com" "od:C:\{DefaultOutputDirectory}" "pc:{Environment.ProcessorCount}" "ext:{DefaultHtmlExtensions}"
             """;
     }
@@ -159,10 +176,10 @@ internal class InputParams
             throw new ArgumentException($"'{nameof(errorMessage)}' cannot be null or whitespace.", nameof(errorMessage));
         }
 
-        return new InputParams(null!, null, null, null, errorMessage);
+        return new InputParams(null!, null, null, null, null, errorMessage);
     }
 
-    public static InputParams CreateValid(string baseUrl, string? outputDirectory, int? parallelProcessCount, string? htmlExtensions)
+    public static InputParams CreateValid(string baseUrl, string? outputDirectory, int? parallelProcessCount, string? htmlExtensions, bool? retryOnTimeout)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -185,6 +202,7 @@ internal class InputParams
                 outputDirectory: outputDirectory,
                 parallelProcessCount: parallelProcessCount,
                 htmlExtensions: htmlExtensions,
+                retryOnTimeout: retryOnTimeout,
                 errorMessage: null);
         }
         catch (Exception ex)
@@ -206,4 +224,6 @@ internal class InputParams
     public int ParallelProcessCount { get; }
 
     public string HtmlExtensions { get; }
+
+    public bool RetryOnTimeout { get; }
 }

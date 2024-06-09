@@ -2,7 +2,7 @@
   "profiles": {
     "SampleWebScrapper": {
       "commandName": "Project",
-      "commandLineArgs": "https://books.toscrape.com/\r\nod:_MY_TEST_SCRPPING_OUTPUT"
+      "commandLineArgs": "https://books.toscrape.com/\r\nod:_MY_TEST_SCRPPING_OUTPUT\r\nrto:true"
     }
   }
 }

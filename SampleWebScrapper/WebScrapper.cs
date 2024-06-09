@@ -3,11 +3,14 @@ using SampleWebScrapper.Helpers;
 using SampleWebScrapper.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net.Sockets;
 
 namespace SampleWebScrapper;
 
 internal class WebScrapper
 {
+    private const int WSAETIMEDOUT = 10060; //https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2
+
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly ConcurrentDictionary<string, object?> _visited = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, object?> _filesProcessed = new(StringComparer.OrdinalIgnoreCase);
@@ -58,9 +61,12 @@ internal class WebScrapper
         await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
 
         Stopwatch stopwatch = Stopwatch.StartNew();
-        
-        await ScrapeCoreResourcesAsync();
-        await DownloadDeferredResourcesAsync();
+
+        do {
+            await ScrapeCoreResourcesAsync();
+            await DownloadDeferredResourcesAsync();
+        }
+        while (_queue.Count > 0);
 
         stopwatch.Stop();
 
@@ -108,6 +114,8 @@ internal class WebScrapper
         {
             await Task.WhenAll(deferredTasks);
         }
+
+        _deferredLinks.Clear();
     }
 
     private async Task LogSummaryAsync(TimeSpan processDuration)
@@ -133,7 +141,7 @@ internal class WebScrapper
 
     private async Task LogIssuesAsync(string title, IEnumerable<string> entries, MessageType messageType)
     {
-        if(entries?.Any() != true)
+        if (entries?.Any() != true)
         {
             return;
         }
@@ -184,7 +192,7 @@ internal class WebScrapper
             destinationPath = Path.Combine(destinationPath, "index.html");
         }
 
-        bool success = await DownloadAsync(url, uri, destinationPath);
+        bool success = await DownloadAsync(url, destinationPath);
 
         if (success)
         {
@@ -192,12 +200,12 @@ internal class WebScrapper
         }
     }
 
-    private async Task<bool> DownloadAsync(string url, Uri uri, string destinationPath)
+    private async Task<bool> DownloadAsync(string url, string destinationPath)
     {
         try
         {
-            using HttpClient client = new ();
-            var response = await client.GetAsync(uri);
+            using HttpClient client = new();
+            var response = await client.GetAsync(url);
 
             HttpContent content = response.Content;
 
@@ -219,6 +227,25 @@ internal class WebScrapper
         }
         catch (Exception ex)
         {
+            bool isSocketTimeout =
+                ex is HttpRequestException httpEx
+                &&
+                httpEx.InnerException is SocketException socketEx
+                && (
+                    socketEx.ErrorCode == WSAETIMEDOUT
+                    ||
+                    socketEx.SocketErrorCode == SocketError.TimedOut
+                    ||
+                    socketEx.NativeErrorCode == WSAETIMEDOUT);
+
+            if (isSocketTimeout && _inputParams.RetryOnTimeout)
+            {
+                string returnMessage = $"Failed to download '{url}' due to socket timeout. Requeuing for retry.";
+                await _logger.LogErrorAsync(returnMessage);
+                _queue.Enqueue(url);
+                return false;
+            }
+
             string message = $"Failed to download {url}: {ex.Message}.";
             await _logger.LogErrorAsync(message);
             _errors.Add(message);
@@ -228,7 +255,7 @@ internal class WebScrapper
 
     private void QueueLinksFromFileAsync(string path, Uri currentUri)
     {
-        if(!_inputParams.IsHtmlFile(path))
+        if (!_inputParams.IsHtmlFile(path))
         {
             _logger.LogInsignificantAsync($"Skipping '{path}' because it is not an html file.");
             return;
