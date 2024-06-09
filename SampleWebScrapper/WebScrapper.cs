@@ -62,11 +62,23 @@ internal class WebScrapper
 
         Stopwatch stopwatch = Stopwatch.StartNew();
 
-        do {
+        await _logger.LogEmphasisAsync($"+ Enqueuing '{_startingUrl}' for processing...");
+        _queue.Enqueue(_startingUrl);
+
+        while(true)
+        {
             await ScrapeCoreResourcesAsync();
             await DownloadDeferredResourcesAsync();
+        
+            if(_queue.Count == 0)
+            {
+                break;
+            }
+
+            await _logger.LogEmphasisAsync($"Restarting to process {_queue.Count} requeued resources...");
+            
+            _deferredLinks.Clear();
         }
-        while (_queue.Count > 0);
 
         stopwatch.Stop();
 
@@ -75,7 +87,7 @@ internal class WebScrapper
 
     private async Task ScrapeCoreResourcesAsync()
     {
-        _queue.Enqueue(_startingUrl);
+        await _logger.LogEmphasisAsync("Starting scraping...");
 
         while (_queue.Count > 0)
         {
@@ -87,6 +99,8 @@ internal class WebScrapper
             {
                 if (_queue.TryDequeue(out var parallelUrl))
                 {
+                    await _logger.LogNormalAsync($"- Dequeued '{parallelUrl}' for processing...");
+
                     tasks.Add(DownloadResourceAsync(parallelUrl));
                 }
             }
@@ -97,6 +111,8 @@ internal class WebScrapper
 
     private async Task DownloadDeferredResourcesAsync()
     {
+        await _logger.LogEmphasisAsync("Starting downloading deferred resources...");
+
         List<Task> deferredTasks = new();
 
         for (int i = 0; i < _deferredLinks.Count; i++)
@@ -240,9 +256,9 @@ internal class WebScrapper
 
             if (isSocketTimeout && _inputParams.RetryOnTimeout)
             {
-                string returnMessage = $"Failed to download '{url}' due to socket timeout. Requeuing for retry.";
-                await _logger.LogErrorAsync(returnMessage);
-                _queue.Enqueue(url);
+                string retryMessage = $"Failed to download '{url}' due to socket timeout.";
+                await _logger.LogErrorAsync(retryMessage);
+                RequeueForProcessingUrl(url);
                 return false;
             }
 
@@ -251,6 +267,14 @@ internal class WebScrapper
             _errors.Add(message);
             return false;
         }
+    }
+
+    private async void RequeueForProcessingUrl(string url)
+    {
+        await _logger.LogEmphasisAsync($"Requeuing '{url}' for processing...");
+
+        _visited.TryRemove(url, out _);
+        _queue.Enqueue(url);
     }
 
     private void QueueLinksFromFileAsync(string path, Uri currentUri)

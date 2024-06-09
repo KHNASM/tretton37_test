@@ -10,19 +10,11 @@ interface IOutputLogger
 
     Task LogNormalAsync(string message);
 
+    Task LogEmphasisAsync(string message);
+
     Task LogSuccessAsync(string message);
 
     Task LogWarningAsync(string message);
 
     Task LogErrorAsync(string message);
-
-    void LogInsignificant(string message);
-
-    void LogInfo(string message);
-
-    void LogSuccess(string message);
-
-    void LogWarning(string message);
-
-    void LogError(string message);
 }

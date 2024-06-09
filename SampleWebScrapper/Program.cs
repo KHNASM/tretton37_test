@@ -43,6 +43,9 @@ public class Program
             // restore the original colors anyway
             Console.ForegroundColor = foregroundColor;
             Console.BackgroundColor = backgroundColor;
+
+            Console.WriteLine();
+            Console.WriteLine("-- END --");
         }
     }
 }

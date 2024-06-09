@@ -16,6 +16,8 @@ internal class ConsoleLogger : OutputLogger
     private static ConsoleColor GetColor(MessageType level) => level switch
     {
         MessageType.Insignificant => ConsoleColor.DarkGray,
+        MessageType.Normal => ConsoleColor.Gray,
+        MessageType.Emphasis => ConsoleColor.Cyan,
         MessageType.Success => ConsoleColor.Green,
         MessageType.Warning => ConsoleColor.Yellow,
         MessageType.Error => ConsoleColor.Red,

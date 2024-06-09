@@ -4,6 +4,7 @@ enum MessageType
 {
     Insignificant,
     Normal,
+    Emphasis,
     Success,
     Warning,
     Error
