@@ -1,5 +1,7 @@
 ﻿using HtmlAgilityPack;
+using SampleWebScrapper.Logging;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace SampleWebScrapper;
 
@@ -8,40 +10,52 @@ internal class WebScrapper
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly ConcurrentDictionary<string, object?> _visited = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, object?> _filesProcessed = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, object?> _nonScrapableLinks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, object?> _deferredLinks = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly ConcurrentBag<string> _warnings = new();
+    private readonly ConcurrentBag<string> _errors = new();
 
     private readonly Uri _baseUri;
     private readonly string _startingUrl;
     private readonly string _outputRootDirectory;
-    
-    public WebScrapper(InputParams inputParams)
-    {
-        if (inputParams is null)
-        {
-            throw new ArgumentNullException(nameof(inputParams));
-        }
+    private readonly IOutputLogger _logger;
 
-        if(!inputParams.IsValid)
+    private volatile int _itemCount = 0; // volatile to prevent compiler optimizations
+
+    public WebScrapper(InputParams inputParams, IOutputLogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(inputParams);
+
+        if (!inputParams.IsValid)
         {
-           throw new ArgumentException(inputParams.ErrorMessage, nameof(inputParams));
+            throw new ArgumentException(inputParams.ErrorMessage, nameof(inputParams));
         }
 
         _outputRootDirectory = inputParams.OutputDirectory;
-        
 
         if (!Uri.TryCreate(inputParams.BaseUrl, UriKind.RelativeOrAbsolute, out Uri? uri) || uri == null || !uri.IsAbsoluteUri)
         {
-            throw new ArgumentException($"'{nameof(inputParams)}.{inputParams.BaseUrl}' must be a valid absolute url.", $"{nameof(inputParams)}.{inputParams.BaseUrl}");
+            throw new ArgumentException(
+                $"'{nameof(inputParams)}.{inputParams.BaseUrl}' must be a valid absolute url.",
+                $"{nameof(inputParams)}.{inputParams.BaseUrl}");
         }
 
         string baseUrl = uri.GetLeftPart(UriPartial.Authority);
 
         _baseUri = new Uri(baseUrl);
         _startingUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/', '\\');
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task RunScraperAsync()
     {
+        await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
+        await _logger.LogAsync(MessageType.Normal, $"Starting scrapping {_baseUri} recursively into the directory '{_outputRootDirectory}'. . .");
+        await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+
+
         _queue.Enqueue(_startingUrl);
 
         while (_queue.Count > 0)
@@ -54,38 +68,94 @@ internal class WebScrapper
             {
                 if (_queue.TryDequeue(out var parallelUrl))
                 {
-                    tasks.Add(DownloadPageAsync(parallelUrl));
+                    tasks.Add(DownloadResourceAsync(parallelUrl));
                 }
             }
 
             await Task.WhenAll(tasks);
         }
 
-        // non-scrapable links
-        List<Task> moreTasks = new();
+        List<Task> deferredTasks = new();
 
-        for (int i = 0; i < _nonScrapableLinks.Count; i++)
+        for (int i = 0; i < _deferredLinks.Count; i++)
         {
-            moreTasks.Add(DownloadPageAsync(_nonScrapableLinks.ElementAt(i).Key, false));
+            deferredTasks.Add(DownloadResourceAsync(_deferredLinks.ElementAt(i).Key, false));
 
             if ((i + 1) % Environment.ProcessorCount == 0)
             {
-                await Task.WhenAll(moreTasks);
-                moreTasks.Clear();
+                await Task.WhenAll(deferredTasks);
+                deferredTasks.Clear();
             }
         }
 
-        if (moreTasks.Count > 0)
+        if (deferredTasks.Count > 0)
         {
-            await Task.WhenAll(moreTasks);
+            await Task.WhenAll(deferredTasks);
         }
+
+        stopwatch.Stop();
+
+        await LogSummary(stopwatch.Elapsed);
     }
 
-    private async Task DownloadPageAsync(string url, bool drilldown = true)
+    private async Task LogSummary(TimeSpan processDuration)
+    {
+        await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
+        await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
+        await _logger.LogAsync(MessageType.Normal, "SUMMARY", string.Empty);
+        await _logger.LogAsync(MessageType.Normal, "=======", string.Empty);
+        await _logger.LogAsync(MessageType.Normal, Environment.NewLine, string.Empty);
+
+        MessageType messageType = MessageType.Success;
+
+        if (_warnings.Count > 0)
+        {
+            messageType = MessageType.Warning;
+
+            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
+
+            await _logger.LogAsync(messageType, "WARNINGS:", string.Empty);
+
+            foreach (string warning in _warnings)
+            {
+                await _logger.LogAsync(messageType, warning, string.Empty);
+            }
+
+            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
+        }
+
+        if (_errors.Count > 0)
+        {
+            messageType = MessageType.Error;
+
+            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
+
+            await _logger.LogAsync(messageType, "ERRORS:", string.Empty);
+
+            foreach (string error in _errors)
+            {
+                await _logger.LogAsync(messageType, error, string.Empty);
+            }
+
+            await _logger.LogAsync(messageType, Environment.NewLine, string.Empty);
+        }
+
+        await _logger.LogAsync(messageType,
+            $"""
+
+
+            Scraped Items: {_itemCount}
+            Errors:        {_errors.Count}
+            Warnings:      {_warnings.Count}
+            Completed In:  {processDuration}
+            """, string.Empty);
+    }
+
+    private async Task DownloadResourceAsync(string url, bool drilldown = true)
     {
         if (_visited.ContainsKey(url))
         {
-            await WriteLineAsync($"U U U U  Already visited {url}"); // TODO: revisit to improve this
+            await _logger.LogInsignificantAsync($"The resource at '{url}' has already been visited.");
             return;
         }
         else
@@ -95,44 +165,68 @@ internal class WebScrapper
 
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || uri == null)
         {
-            await WriteLineAsync($"X X X X X X Unable to download page because '{url}' is not a valid absolute url"); // TODO: revisit to improve this
+            string message = $"Skipping downloading page because '{url}' is not a valid absolute url.";
+            await _logger.LogWarningAsync(message);
+            _warnings.Add(message);
             return;
         }
 
         if (uri.Host != _baseUri.Host)
         {
-            await WriteLineAsync($"X X X X X X Unable to download page because '{url}' is not on the same domain as the base url"); // TODO: revisit to improve this
+            string message = $"Skipping downloading page because '{url}' is not on the same domain as the base url.";
+            await _logger.LogWarningAsync(message);
+            _warnings.Add(message);
             return;
         }
 
         string localPath = ComputePath(_outputRootDirectory, uri);
+
         if (localPath == _outputRootDirectory) // TODO: revisit to improve this
         {
             localPath = Path.Combine(localPath, "index.html");
         }
 
-        using var client = new HttpClient();
-        var response = await client.GetAsync(uri);
+        bool success = await DownloadAsync(url, uri, localPath);
 
-        HttpContent content = response.Content;
-
-        if (!response.IsSuccessStatusCode)
-        {
-            await WriteLineAsync($"X X X X X X Failed to download {url}: Server returned: HTTP {(int)response.StatusCode}"); // TODO: revisit to improve this
-            return;
-        }
-
-        using Stream stream = await response.Content.ReadAsStreamAsync();
-        await SaveStreamAsFileAsync(stream, localPath);
-
-        await WriteLineAsync($":) :) :) Downloaded {url}"); // TODO: revisit to improve this
-
-        if (drilldown)
+        if (success && drilldown)
         {
             QueueLinksFromFileAsync(localPath, uri);
         }
     }
 
+    private async Task<bool> DownloadAsync(string url, Uri uri, string localPath)
+    {
+        try
+        {
+            using HttpClient client = new HttpClient();
+            var response = await client.GetAsync(uri);
+
+            HttpContent content = response.Content;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                string message = $"Failed to download {url}: Server returned: HTTP {(int)response.StatusCode}.";
+                await _logger.LogErrorAsync(message);
+                _errors.Add(message);
+                return false;
+            }
+
+            using Stream stream = await response.Content.ReadAsStreamAsync();
+            await SaveStreamAsFileAsync(stream, localPath);
+
+            Interlocked.Increment(ref _itemCount);  // thread-safe increment
+
+            await _logger.LogSuccessAsync($"Downloaded item {_itemCount} from '{url}'.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            string message = $"Failed to download {url}: {ex.Message}.";
+            await _logger.LogErrorAsync(message);
+            _errors.Add(message);
+            return false;
+        }
+    }
 
     private void QueueLinksFromFileAsync(string path, Uri currentUri)
     {
@@ -145,7 +239,7 @@ internal class WebScrapper
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .ToArray();
 
-        var nonScrapableLinks = doc.DocumentNode.Descendants("link")
+        var deferredLinks = doc.DocumentNode.Descendants("link")
             .Select(a => ConvertToAbsoluteUrl(a.GetAttributeValue("href", null), currentUri)!)
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .Union(doc.DocumentNode.Descendants("script")
@@ -156,9 +250,9 @@ internal class WebScrapper
                 .Where(href => !string.IsNullOrWhiteSpace(href)));
 
 
-        foreach (var link in nonScrapableLinks)
+        foreach (var link in deferredLinks)
         {
-            _nonScrapableLinks.TryAdd(link, null);
+            _deferredLinks.TryAdd(link, null);
         }
 
         foreach (string pageLink in pageLinks)
@@ -221,7 +315,7 @@ internal class WebScrapper
     {
         if (_filesProcessed.ContainsKey(localPath))
         {
-            await WriteLineAsync($"F F F F Already processed {localPath}"); // TODO: revisit to improve this
+            await _logger.LogInsignificantAsync($"Already downloaded {localPath}");
             return;
         }
         else
@@ -239,6 +333,4 @@ internal class WebScrapper
         using var fileStream = File.Create(localPath);
         await stream.CopyToAsync(fileStream);
     }
-
-    private Task WriteLineAsync(string text) => Console.Out.WriteLineAsync(text);
 }
