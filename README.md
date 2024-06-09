@@ -75,7 +75,7 @@ Hence the size of batch remains non-deterministic.
 
 ## Output Logs
 
-Comprehensive output logs are omitted. The indicate progress. They are colour-coded/annotated to elaborate the process in the real time.
+Comprehensive output logs are omitted. To indicate progress. They are colour-coded/annotated to elaborate the process in the real time.
 
 -   Green [Success] entries normally indicate a resource was downloaded successfully
 -   Yellow [Warning] entries normally mean a problem in the HTML, e.g. a malformed embedded URL
@@ -88,7 +88,7 @@ This detailed and elaborate logging helps both the understanding of inner workin
 
 ## Loose Coupling
 
-Concerns are isolated are decoupled. For example logging and file handling is decoupled from the core Scraper. Scrapper relies on abstraction meaning that different implementations can be injected. E.g. download filing destination can easily be replaced with a remote API based (e.g. amazon S3), and Console logging can be replaced with third part API based logging.
+Concerns are isolated and decoupled. For example logging and file handling is decoupled from the core Scraper. Scrapper relies on abstraction meaning that different implementations can be injected. E.g. download filing destination can easily be replaced with a remote API based (e.g. amazon S3), and Console logging can be replaced with third part API based logging.
 
 ## Dependency Injection
 
@@ -139,10 +139,10 @@ The developer acknowledges there might be ways to optimize the solution further.
 
 ### .NET CLI:
 
-1.  Clone the repository using git clone.
+1.  Clone the repository using ``` git clone ```.
     1.  Navigate to the project directory.
-    2.  Restore dependencies using dotnet restore.
-    3.  Build and run the application using dotnet build and dotnet run.
+    2.  Restore dependencies using ``` dotnet restore ```.
+    3.  Build and run the application using  ``` dotnet build ``` and ``` dotnet run ```.
 
 # How to use
 
